@@ -1,0 +1,10 @@
+[package]
+name = "eight-zip"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "8zip"
+path = "src/main.rs"
+
+[dependencies]
