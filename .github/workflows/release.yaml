@@ -1,0 +1,313 @@
+name: Release
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  push:
+    branches:
+      - "main"
+
+env:
+  PROJECT_NAME: 8zip
+
+jobs:
+  version:
+    name: 🌐 Auto Version Increment
+    runs-on: ubuntu-24.04
+    outputs:
+      VERSION: ${{ steps.generate.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: generate
+        run: |
+          set -e
+          LAST_VERSION=$(curl -sSL https://api.github.com/repos/alshdavid/$PROJECT_NAME/releases/latest | jq -r ".tag_name" | cut -d "." -f 3)
+          if [ "$LAST_VERSION" = "" ]; then
+            LAST_VERSION="0"
+          fi
+          declare -i var="$LAST_VERSION"
+          var=$var+1
+          VERSION="0.0.$var"
+
+          echo $VERSION
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: 🧪 Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: export PATH="$HOME/.cargo/bin:$PATH"
+      # Run Tests
+      - run: cargo test
+
+  format:
+    name: 📝 Format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: export PATH="$HOME/.cargo/bin:$PATH"
+      - run: cargo install cargo-xfmt
+      # Format
+      - run: cargo xfmt --check
+  lint:
+    name: 🤓 Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: export PATH="$HOME/.cargo/bin:$PATH"
+      # Lint
+      - run: cargo clippy -- --deny "warnings"
+
+  build_linux_amd64:
+    name: 🐥 Linux AMD64
+    runs-on: ubuntu-24.04
+    needs:
+      - version
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    container:
+      image: debian:12
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: apt-get update -y && apt-get install -y curl wget build-essential unzip musl-dev musl-tools
+        # Install Nodejs
+      - run: mkdir -p /opt/nodejs; curl -L $(curl https://sh.davidalsh.com/packages/nodejs/latest_linux_amd64_tar_gz) | tar -xzf - -C /opt/nodejs
+      - run: echo "/opt/nodejs/bin" >> $GITHUB_PATH
+      - run: export PATH="/opt/nodejs/bin:$PATH"
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: export PATH="$HOME/.cargo/bin:$PATH"
+      - run: rustup target add x86_64-unknown-linux-musl
+      # Build
+      - run: node ./.github/scripts/string-replace.mjs ./Cargo.toml "0.0.0-local" "$VERSION"
+      - run: cargo build --release --target x86_64-unknown-linux-musl
+      - run: mkdir binaries; cp ./target/x86_64-unknown-linux-musl/release/8zip ./binaries
+      - uses: actions/upload-artifact@v6
+        with:
+          name: packages-linux-amd64
+          path: ${{ github.workspace }}/binaries/**/*
+          if-no-files-found: warn
+          retention-days: 1
+
+  build_linux_arm64:
+    name: 🐥 Linux ARM64
+    runs-on: ubuntu-24.04-arm
+    needs:
+      - version
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    container:
+      image: debian:12
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: apt-get update -y && apt-get install -y curl wget build-essential unzip musl-dev musl-tools
+      # Install Nodejs
+      - run: mkdir -p /opt/nodejs; curl -L $(curl https://sh.davidalsh.com/packages/nodejs/latest_linux_arm64_tar_gz) | tar -xzf - -C /opt/nodejs
+      - run: echo "/opt/nodejs/bin" >> $GITHUB_PATH
+      - run: export PATH="/opt/nodejs/bin:$PATH"
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: export PATH="$HOME/.cargo/bin:$PATH"
+      - run: rustup target add aarch64-unknown-linux-musl
+      # Build
+      - run: node ./.github/scripts/string-replace.mjs ./Cargo.toml "0.0.0-local" "$VERSION"
+      - run: cargo build --release --target aarch64-unknown-linux-musl
+      - run: mkdir binaries; cp ./target/aarch64-unknown-linux-musl/release/8zip ./binaries
+      - uses: actions/upload-artifact@v6
+        with:
+          name: packages-linux-arm64
+          path: ${{ github.workspace }}/binaries/**/*
+          if-no-files-found: warn
+          retention-days: 1
+
+  build_macos_arm64:
+    name: 🍎 MacOS ARM64
+    runs-on: macos-latest
+    needs:
+      - version
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v6
+      # Install Nodejs
+      - run: sudo mkdir -p /opt/nodejs; curl -L $(curl https://sh.davidalsh.com/packages/nodejs/latest_macos_arm64_tar_gz) | sudo tar -xzf - -C /opt/nodejs
+      - run: echo "/opt/nodejs/bin" >> $GITHUB_PATH
+      - run: export PATH="/opt/nodejs/bin:$PATH"
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: export PATH="$HOME/.cargo/bin:$PATH"
+      - run: rustup target add aarch64-apple-darwin
+      # Build
+      - run: node ./.github/scripts/string-replace.mjs ./Cargo.toml "0.0.0-local" "$VERSION"
+      - run: cargo build --release --target aarch64-apple-darwin
+      - run: mkdir binaries; cp ./target/aarch64-apple-darwin/release/8zip ./binaries
+      - uses: actions/upload-artifact@v6
+        with:
+          name: packages-macos-arm64
+          path: ${{ github.workspace }}/binaries/**/*
+          if-no-files-found: warn
+          retention-days: 1
+
+  build_macos_amd64:
+    name: 🍎 MacOS AMD64
+    runs-on: macos-latest
+    needs:
+      - version
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v6
+      # Install Nodejs
+      - run: sudo mkdir -p /opt/nodejs; curl -L $(curl https://sh.davidalsh.com/packages/nodejs/latest_macos_arm64_tar_gz) | sudo tar -xzf - -C /opt/nodejs
+      - run: echo "/opt/nodejs/bin" >> $GITHUB_PATH
+      - run: export PATH="/opt/nodejs/bin:$PATH"
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: export PATH="$HOME/.cargo/bin:$PATH"
+      - run: rustup target add x86_64-apple-darwin
+      # Build
+      - run: node ./.github/scripts/string-replace.mjs ./Cargo.toml "0.0.0-local" "$VERSION"
+      - run: cargo build --release --target x86_64-apple-darwin
+      - run: mkdir binaries; cp ./target/x86_64-apple-darwin/release/8zip ./binaries
+      - uses: actions/upload-artifact@v6
+        with:
+          name: packages-macos-amd64
+          path: ${{ github.workspace }}/binaries/**/*
+          if-no-files-found: warn
+          retention-days: 1
+
+
+  build_windows_amd64:
+    name: 🟦 Windows AMD64
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    needs:
+      - version
+    steps:
+      - uses: actions/checkout@v6
+      # Install Nodejs
+      - run: mkdir -p /opt/nodejs; curl -L $(curl https://sh.davidalsh.com/packages/nodejs/latest_windows_amd64_tar_gz) | tar -xzf - -C /opt/nodejs
+      - run: echo "/opt/nodejs" >> $GITHUB_PATH
+      - run: export PATH="/opt/nodejs:$PATH"
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: cargo --version
+      - run: rustup target add x86_64-pc-windows-msvc
+      # Build
+      - run: node ./.github/scripts/string-replace.mjs ./Cargo.toml "0.0.0-local" "$VERSION"
+      - run: cargo build --release --target x86_64-pc-windows-msvc
+      - run: mkdir binaries; cp ./target/x86_64-pc-windows-msvc/release/8zip.exe ./binaries
+      - uses: actions/upload-artifact@v6
+        with:
+          name: packages-windows-amd64
+          path: ${{ github.workspace }}/binaries/**/*
+          if-no-files-found: warn
+          retention-days: 1
+
+  build_windows_arm64:
+    name: 🟦 Windows ARM64
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    needs:
+      - version
+    steps:
+      - uses: actions/checkout@v6
+      # Install Nodejs
+      - run: mkdir -p /opt/nodejs; curl -L $(curl https://sh.davidalsh.com/packages/nodejs/latest_windows_amd64_tar_gz) | tar -xzf - -C /opt/nodejs
+      - run: echo "/opt/nodejs" >> $GITHUB_PATH
+      - run: export PATH="/opt/nodejs:$PATH"
+      # Install Rust
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - run: cargo --version
+      - run: rustup target add aarch64-pc-windows-msvc
+      # Build
+      - run: node ./.github/scripts/string-replace.mjs ./Cargo.toml "0.0.0-local" "$VERSION"
+      - run: cargo build --release --target aarch64-pc-windows-msvc
+      - run: mkdir binaries; cp ./target/aarch64-pc-windows-msvc/release/8zip.exe ./binaries
+      - uses: actions/upload-artifact@v6
+        with:
+          name: packages-windows-arm64
+          path: ${{ github.workspace }}/binaries/**/*
+          if-no-files-found: warn
+          retention-days: 1
+
+
+  publish_github_release:
+    name: "🔄 Publish Github Release"
+    runs-on: ubuntu-24.04
+    needs:
+      - version
+      - test
+      - format
+      - lint
+      - build_linux_amd64
+      - build_linux_arm64
+      - build_macos_amd64
+      - build_macos_arm64
+      - build_windows_amd64
+      - build_windows_arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Publish` Github Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.VERSION }}
+        run: |
+          set -e
+          echo "Tag: ${TAG}"
+
+          gh release create $TAG  --draft --notes "Automatically built binaries"
+          gh release edit $TAG --title "🚀 Latest"
+          
+          cd artifacts
+
+          for name in *; do
+            cd "${{ github.workspace }}/artifacts/${name}"
+            
+            chmod +x ./*
+
+            tar -czvf ./${name}.tar.gz ./*
+            gh release upload $TAG ${name}.tar.gz
+
+            rm ./${name}.tar.gz
+            tar -cJvf ./${name}.tar.xz ./*
+            gh release upload $TAG ${name}.tar.xz
+          done
+
+          gh release edit $TAG --draft=false
+
+          echo "VERSION=$TAG" >> "$GITHUB_OUTPUT"
