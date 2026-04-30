@@ -5,6 +5,7 @@ use anyhow::Context;
 use anyhow::Result;
 use tar::{self};
 use walkdir::WalkDir;
+use xz2::stream::MtStreamBuilder;
 use xz2::write::XzEncoder;
 
 pub fn compress_tar_xz(
@@ -28,8 +29,14 @@ pub fn compress_tar_xz(
   let tar_xz =
     File::create(output).context(format!("Failed to create output file: {:?}", output))?;
 
+  let stream = MtStreamBuilder::new()
+    .threads(num_cpus::get_physical() as u32)
+    .preset(9) // Compression level 0-9
+    .encoder()
+    .map_err(|e| anyhow::anyhow!("Failed to create XZ stream: {}", e))?;
+
   // Create xz encoder with default compression level (6)
-  let enc = XzEncoder::new(tar_xz, 6);
+  let enc = XzEncoder::new_stream(tar_xz, stream);
 
   // Create tar archive builder
   let mut tar = tar::Builder::new(enc);
