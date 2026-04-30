@@ -33,6 +33,7 @@ pub fn compress_tar_xz(
 
   // Create tar archive builder
   let mut tar = tar::Builder::new(enc);
+  tar.follow_symlinks(false);
 
   // Walk through the directory recursively
   for entry in WalkDir::new(&source_path)
