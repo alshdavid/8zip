@@ -3,8 +3,9 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use flate2::Compression;
-use flate2::write::GzEncoder;
+use gzp::deflate::Gzip;
+use gzp::par::compress::Compression;
+use gzp::par::compress::ParCompressBuilder;
 use tar::{self};
 use walkdir::WalkDir;
 
@@ -30,7 +31,10 @@ pub fn compress_tar_gz(
     File::create(output).context(format!("Failed to create output file: {:?}", output))?;
 
   // Create gzip encoder
-  let enc = GzEncoder::new(tar_gz, Compression::default());
+  let enc = ParCompressBuilder::<Gzip>::new()
+    .num_threads(num_cpus::get_physical())?
+    .compression_level(Compression::best())
+    .from_writer(tar_gz);
 
   // Create tar archive builder
   let mut tar = tar::Builder::new(enc);
